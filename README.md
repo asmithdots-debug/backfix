@@ -157,6 +157,27 @@ Multi-step history works exactly like a normal browser back/forward stack, becau
 own `NavigationController` doing it — this module just triggers the same key Chrome already
 knows how to handle, on the edge it currently doesn't.
 
+### 7. Bigger home screen + dock icons (iOS-style, past the OEM slider's own max)
+
+The launcher's own icon-size slider caps out at `IconParam.MAX_ICON_IMAGE_SIZE` (60dp) — not
+big enough for an iOS-style no-label look. Workspace icons and dock (hotseat) icons turned out to
+be computed completely independently on this build, confirmed by testing (scaling only the
+workspace value left the dock untouched):
+
+- Workspace grid icons: `IconParam.getIconSizePx()` is the single value every icon-size-dependent
+  computation in `DeviceProfile` reads from (cell text position, drawable padding, etc.) — hooked
+  there, multiplying the return value.
+- Dock icons: read from a completely separate private `HotseatParam.hotseatIconSizePx` field, set
+  once in the constructor straight from `InvariantDeviceProfile.iconSize[0]`, never going through
+  `IconParam`'s getter at all — hooked `HotseatParam`'s constructor instead, reading and
+  overwriting that field directly via reflection (no public getter/setter exists for it).
+
+**Where:** app process, scope `com.android.launcher`.
+
+Both hooks share one `SCALE` constant (currently `1.1f`, tuned live on-device rather than guessed
+— started at 1.35, too big, walked down through 1.15/1.08 before landing here) in
+`IconSizeHook.kt`.
+
 ## Requirements
 
 - Root (Magisk)
@@ -164,7 +185,7 @@ knows how to handle, on the edge it currently doesn't.
   [Vector](https://github.com/JingMatrix/LSPosed))
 - Enabling fix #1 or fix #6 requires the module to have **system framework** scope in your Xposed
   manager, which needs a **reboot** to take effect (system_server can't be force-stopped like a
-  regular app). Fixes #2–#5 only need their respective app's process restarted
+  regular app). Fixes #2–#5 and #7 only need their respective app's process restarted
   (`adb shell am force-stop <package>`), no reboot needed.
 
 ## Building

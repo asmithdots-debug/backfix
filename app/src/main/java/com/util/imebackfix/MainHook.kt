@@ -56,7 +56,10 @@ class MainHook : IXposedHookLoadPackage {
                 }
             }
             "com.oppo.quicksearchbox" -> QuickSearchBoxHook.install(lpparam)
-            "com.android.launcher" -> LauncherHook.install(lpparam)
+            "com.android.launcher" -> {
+                LauncherHook.install(lpparam)
+                IconSizeHook.install(lpparam)
+            }
             "com.android.chrome" -> {
                 try {
                     ChromeSwipeForwardHook.install(lpparam)
