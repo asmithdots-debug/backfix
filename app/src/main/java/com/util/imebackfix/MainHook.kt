@@ -49,9 +49,21 @@ class MainHook : IXposedHookLoadPackage {
                 } catch (t: Throwable) {
                     XposedBridge.log("$TAG: failed to hook IMMS: ${t.message}")
                 }
+                try {
+                    ForwardKeyInjector.install(lpparam)
+                } catch (t: Throwable) {
+                    XposedBridge.log("$TAG: failed to install ForwardKeyInjector: ${t.message}")
+                }
             }
             "com.oppo.quicksearchbox" -> QuickSearchBoxHook.install(lpparam)
             "com.android.launcher" -> LauncherHook.install(lpparam)
+            "com.android.chrome" -> {
+                try {
+                    ChromeSwipeForwardHook.install(lpparam)
+                } catch (t: Throwable) {
+                    XposedBridge.log("$TAG: failed to hook Chrome swipe-forward: ${t.message}")
+                }
+            }
         }
     }
 

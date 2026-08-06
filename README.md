@@ -107,14 +107,65 @@ activity is about to appear and never restores the workspace (blurred/hidden ico
 showed up as a blank home screen after opening notifications/settings this way and then going
 home.
 
+### 6. Chrome: swipe from the right edge to go forward (iOS-Safari-style)
+
+Left-edge swipe already goes back. A right-edge swipe triggered the *exact same* back action —
+there's no built-in "forward" gesture in Chrome for Android, even though the plumbing to tell
+edges apart already exists.
+
+Confirmed (by testing, not guessing) that the raw touch for an edge swipe never reaches Chrome's
+own `Activity#dispatchTouchEvent` at all — a diagnostic hook there never fired for a real edge
+swipe, meaning the launcher/SystemUI gesture-nav layer consumes/pilfers those touches before the
+app's window ever sees them. Chrome only finds out about the gesture through Android's
+**Predictive Back API**: it registers an `OnBackAnimationCallback` via
+`Activity#getOnBackInvokedDispatcher()`, and the framework delivers the resolved gesture as a
+`BackEvent` carrying `getSwipeEdge()` (`EDGE_LEFT` / `EDGE_RIGHT`) — real, stable, public
+Android SDK (33+) surface, no decompilation of Chrome's own (R8-obfuscated, renamed every build)
+internals required.
+
+**Where:** app process, scope `com.android.chrome`, plus a small system_server-side helper
+(scope `android`).
+
+**How:**
+
+- Hooks `Activity#getOnBackInvokedDispatcher()`, and on the concrete dispatcher class it returns
+  (`android.window.ProxyOnBackInvokedDispatcher` on this build — found dynamically via the live
+  object's own class, not hardcoded, since this name isn't documented public API) hooks
+  `registerOnBackInvokedCallback(int, OnBackInvokedCallback)`.
+- Wraps whatever callback Chrome passes in with a proxy (`RightEdgeForwardCallback`): for
+  `EDGE_LEFT` (or no edge info at all) every call passes straight through to the real callback,
+  so left-edge back and Chrome's own back-preview animation are untouched. For `EDGE_RIGHT`,
+  `onBackStarted`/`onBackProgressed`/`onBackCancelled` are swallowed (no preview animation for a
+  gesture that's about to become forward, not back), and `onBackInvoked()` is replaced with a
+  synthetic `KEYCODE_FORWARD` key press instead of letting the real callback run.
+- `KEYCODE_FORWARD` (125, the documented complement of `KEYCODE_BACK`) was confirmed against
+  Chrome's real in-tab navigation history (`example.com` → `example.org` → back → forward) via
+  `adb shell input keyevent 125` before wiring up the gesture side.
+- A bare in-process `Activity#dispatchKeyEvent(...)` for that synthetic key was silently ignored
+  by Chrome — it bypasses the normal input pipeline entirely. Real delivery needs
+  `InputManager#injectInputEvent`, which requires `INJECT_EVENTS`; Chrome doesn't hold that
+  permission. So the Chrome-side hook just broadcasts a request
+  (`com.util.imebackfix.ACTION_FIRE_FORWARD_KEY`), and `ForwardKeyInjector` — running in
+  `system_server`, uid `system`, which does have that permission — does the actual injection.
+- `ForwardKeyInjector` registers its `BroadcastReceiver` with a short retry-with-backoff loop:
+  `handleLoadPackage("android")` fires very early in `system_server`'s own boot, before
+  `ActivityManager`'s binder is fully wired up, so the first `registerReceiver()` call reliably
+  throws (`NullPointerException` inside `IActivityManager.registerReceiverWithFeature`) — caught
+  and retried a couple of seconds later instead of guessing a fixed startup delay.
+
+Multi-step history works exactly like a normal browser back/forward stack, because it's Chrome's
+own `NavigationController` doing it — this module just triggers the same key Chrome already
+knows how to handle, on the edge it currently doesn't.
+
 ## Requirements
 
 - Root (Magisk)
 - LSPosed-compatible framework active with **system framework** scope support (tested with
   [Vector](https://github.com/JingMatrix/LSPosed))
-- Enabling fix #1 requires the module to have **system framework** scope in your Xposed manager,
-  which needs a **reboot** to take effect. Fixes #2–#5 only need their respective app's process
-  restarted (`adb shell am force-stop <package>`), no reboot needed.
+- Enabling fix #1 or fix #6 requires the module to have **system framework** scope in your Xposed
+  manager, which needs a **reboot** to take effect (system_server can't be force-stopped like a
+  regular app). Fixes #2–#5 only need their respective app's process restarted
+  (`adb shell am force-stop <package>`), no reboot needed.
 
 ## Building
 
@@ -124,8 +175,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Then enable the module in your Xposed manager with scope on: `android` (system framework),
-`com.oppo.quicksearchbox`, `com.android.launcher` — adjust package names if your ROM's Global
-Search / launcher differ.
+`com.oppo.quicksearchbox`, `com.android.launcher`, `com.android.chrome` — adjust package names if
+your ROM's Global Search / launcher / browser differ.
 
 ## How this was built
 
