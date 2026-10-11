@@ -27,6 +27,7 @@ object QuickSearchBoxHook {
 
     fun install(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookFeatureFlag(lpparam)
+        hookTopResultPost(lpparam)
         hookSearchBarEnter(lpparam)
         hookTopResultDispatch(lpparam)
         hookClearOnResume(lpparam)
@@ -106,6 +107,34 @@ object QuickSearchBoxHook {
             XposedBridge.log("$TAG: hooked Pk.gdt.gdb feature flag in quicksearchbox")
         } catch (t: Throwable) {
             XposedBridge.log("$TAG: failed to hook Pk.gdt.gdb: ${t.message}")
+        }
+    }
+
+    /**
+     * ShelfSearchViewModel.z1(payload) posts the top result into D0() only `if (Pk.gdt.gdb())`.
+     * Hooking gdb() alone is not enough on every Xposed implementation: ART may inline that small
+     * static check into z1 (seen with Vector 2.2 — gdb hook installed, but z1 still skipped the
+     * post, so SearchActivity.R1 found D0() empty and Enter did nothing). Post it ourselves.
+     */
+    private fun hookTopResultPost(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val viewModelClass = XposedHelpers.findClass(
+                "com.oplus.globalsearch.ui.viewmodel.ShelfSearchViewModel", lpparam.classLoader
+            )
+            XposedBridge.hookAllMethods(viewModelClass, "z1", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        val liveData = XposedHelpers.callMethod(param.thisObject, "D0")
+                        XposedHelpers.callMethod(liveData, "gdo", param.args.getOrNull(0))
+                        param.result = null
+                    } catch (t: Throwable) {
+                        XposedBridge.log("$TAG: ShelfSearchViewModel.z1 override failed: ${Log.getStackTraceString(t)}")
+                    }
+                }
+            })
+            XposedBridge.log("$TAG: hooked ShelfSearchViewModel.z1 in quicksearchbox")
+        } catch (t: Throwable) {
+            XposedBridge.log("$TAG: failed to hook ShelfSearchViewModel.z1: ${t.message}")
         }
     }
 
