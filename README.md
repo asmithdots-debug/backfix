@@ -66,9 +66,25 @@ tagged `"TopResult.ImeAction"` — but it silently no-ops in three separate plac
 
 **Where:** app process, scope `com.oppo.quicksearchbox`.
 
-**How:** three targeted hooks, one per gate above — force the feature flag to `true`, always
+**How:** targeted hooks, one per gate above — force the feature flag to `true`, always
 forward Enter to the best-match listener via reflection instead of trusting the state check, and
 bypass the stale-key check in `Z0()` by calling the real dispatch function (`Pk.b.gdb`) directly.
+
+Two more hooks make this independent of the cloud config and of the Xposed implementation:
+
+- `TrackingConfigManager.gdl()` ("best result feature" level) is the source of *both* TopResult
+  flags: `Pk.gdt.gdc()` (compute a top result at all, needs `>= 1`, checked in `Pk.gds.gdq`) and
+  `Pk.gdt.gdb()` (wire it to Enter, needs `== 2`). It comes from OPPO's cloud config and can be
+  `null` (e.g. not fetched after a reboot) — then no top result is computed and Enter has nothing
+  to launch. Forced to `2`.
+- `ShelfSearchViewModel.z1()` posts the top result into `D0()` only `if (gdt.gdb())`. With
+  Vector 2.2 (JingMatrix) the `gdb()` hook was installed but ineffective inside `z1` — ART inlined
+  that small static check — so `z1` itself now posts the payload via `D0().gdo()`.
+
+Debugging tip: the hooks log every step (`BackFix: SearchBar.r0 called`, `gda() returned …`,
+`ShelfSearchViewModel.Z0 called …`). `gda() returned false` means `D0()` is empty — look at the
+flags/`z1` above. A hardware Enter sent via `adb shell input keyevent 66` arrives with action id
+`0` and is ignored by `SearchBar.P0` — test with the on-screen keyboard.
 
 ### 3. Global Search keeps the previous query text when reopened
 

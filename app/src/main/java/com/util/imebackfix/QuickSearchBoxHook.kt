@@ -26,7 +26,9 @@ object QuickSearchBoxHook {
     @Volatile private var bestMatchListenerField: java.lang.reflect.Field? = null
 
     fun install(lpparam: XC_LoadPackage.LoadPackageParam) {
+        hookBestResultConfig(lpparam)
         hookFeatureFlag(lpparam)
+        hookTopResultPost(lpparam)
         hookSearchBarEnter(lpparam)
         hookTopResultDispatch(lpparam)
         hookClearOnResume(lpparam)
@@ -106,6 +108,58 @@ object QuickSearchBoxHook {
             XposedBridge.log("$TAG: hooked Pk.gdt.gdb feature flag in quicksearchbox")
         } catch (t: Throwable) {
             XposedBridge.log("$TAG: failed to hook Pk.gdt.gdb: ${t.message}")
+        }
+    }
+
+    /**
+     * TrackingConfigManager.gdl() ("getBestResultFeature") is the source both TopResult flags
+     * read: Pk.gdt.gdc() (compute the top result at all, needs >= 1, checked in Pk.gds.gdq) and
+     * Pk.gdt.gdb() (wire it to Enter, needs == 2). Its value comes from OPPO's cloud config and
+     * can be null (config not fetched, e.g. right after a reboot) — then gdc() is false, no top
+     * result is computed and Enter has nothing to launch. Force the feature level to 2. This method
+     * is large (JSON parsing), so unlike gdb()/z1 it is not inlined into its callers.
+     */
+    private fun hookBestResultConfig(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val configClass = XposedHelpers.findClass(
+                "com.oplus.globalsearch.assist.TrackingConfigManager", lpparam.classLoader
+            )
+            XposedBridge.hookAllMethods(configClass, "gdl", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    param.result = 2
+                }
+            })
+            XposedBridge.log("$TAG: hooked TrackingConfigManager.gdl (best result feature = 2)")
+        } catch (t: Throwable) {
+            XposedBridge.log("$TAG: failed to hook TrackingConfigManager.gdl: ${t.message}")
+        }
+    }
+
+    /**
+     * ShelfSearchViewModel.z1(payload) posts the top result into D0() only `if (Pk.gdt.gdb())`.
+     * Hooking gdb() alone is not enough on every Xposed implementation: ART may inline that small
+     * static check into z1 (seen with Vector 2.2 — gdb hook installed, but z1 still skipped the
+     * post, so SearchActivity.R1 found D0() empty and Enter did nothing). Post it ourselves.
+     */
+    private fun hookTopResultPost(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val viewModelClass = XposedHelpers.findClass(
+                "com.oplus.globalsearch.ui.viewmodel.ShelfSearchViewModel", lpparam.classLoader
+            )
+            XposedBridge.hookAllMethods(viewModelClass, "z1", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        val liveData = XposedHelpers.callMethod(param.thisObject, "D0")
+                        XposedHelpers.callMethod(liveData, "gdo", param.args.getOrNull(0))
+                        param.result = null
+                    } catch (t: Throwable) {
+                        XposedBridge.log("$TAG: ShelfSearchViewModel.z1 override failed: ${Log.getStackTraceString(t)}")
+                    }
+                }
+            })
+            XposedBridge.log("$TAG: hooked ShelfSearchViewModel.z1 in quicksearchbox")
+        } catch (t: Throwable) {
+            XposedBridge.log("$TAG: failed to hook ShelfSearchViewModel.z1: ${t.message}")
         }
     }
 
